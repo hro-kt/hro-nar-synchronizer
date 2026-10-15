@@ -107,6 +107,41 @@ def collect_cmd(date_, spat4, window_min, interval, max_seconds, dry_run) -> Non
         click.echo("  ★キャッシュ Hit が多いです。見ている値が古い可能性があります")
 
 
+@cli.command("probe")
+@click.option("--race-id", required=True, help="netkeiba の race_id 12桁(地方)")
+@click.option("--date", "date_", default=None, help="YYYYMMDD(既定 当日 JST)")
+@click.option("--compare-login", "compare", is_flag=True,
+              help="同じ瞬間にログインあり/なしで取って突き合わせる。"
+                   "★締切2分前に流して、非会員が遅れた値を見ていないか確かめる")
+@click.option("--seconds", type=float, default=900.0)
+@click.option("--interval", type=float, default=3.0)
+@click.option("--spat4", is_flag=True, help="南関東の締切を発走1分前として判定する")
+def probe_cmd(race_id, date_, compare, seconds, interval, spat4) -> None:
+    """前提が変わっていないかを測る(収集とは別。DBに書かない)。"""
+    from .probe import cadence, compare_login
+
+    cfg = load_config()
+    state = cfg.collect.state_path or None
+    if compare:
+        r = compare_login(race_id, state_path=state)
+        for row in r["rows"]:
+            click.echo(f"  {row['at'][11:19]}  非会員{row['n_anon']}頭 / "
+                       f"会員{row['n_auth']}頭  差分: {row['diff'] or 'なし'}")
+        click.echo("")
+        click.echo(f"{r['rounds']}回中 一致 {r['agree']}回 → {r['verdict']}")
+        raise SystemExit(0 if r["agree"] == r["rounds"] else 1)
+
+    r = cadence(race_id, date_ or _today(), seconds=seconds, interval=interval,
+                spat4=spat4, state_path=state, log=click.echo)
+    click.echo("")
+    click.echo(f"  変化 {r['changes']}回 / 更新間隔の中央値 {r['gap_median_sec']}秒"
+               f" / 締切時点で {r['lag_to_deadline_sec']}秒前の情報"
+               f" / キャッシュHit {r['cache_hits']}")
+    click.echo(("○ flow_tan を作れる粒度です" if r["ok"]
+                else "✗ この粒度では T-60s の断面を作れません"))
+    raise SystemExit(0 if r["ok"] else 1)
+
+
 def main() -> None:
     cli()
 
