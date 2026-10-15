@@ -1,0 +1,34 @@
+[tool.poetry]
+name = "hro-nar-synchronizer"
+version = "0.1.0"
+description = "地方競馬(NAR)のオッズ収集。netkeiba の HTTP のみ・JV-Link 非依存"
+authors = ["hro"]
+readme = "README.md"
+packages = [{ include = "hro_nar_synchronizer" }]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+click = ">=8.1"
+structlog = ">=24.0"
+python-dotenv = ">=1.0"
+pyyaml = ">=6.0"
+# 純 Python。libpq 不要。Windows でも動く(この収集は Linux 想定だが揃えておく)
+pg8000 = ">=1.31"
+psycopg = { version = ">=3.1", extras = ["binary"], markers = "sys_platform != 'win32'" }
+# zoneinfo("Asia/Tokyo") が要求するタイムゾーン定義データ。
+# ★Windows には OS の tzdb が無く、最小構成の Linux コンテナにも無いことがある。
+#   hro-synchronizer で未宣言のまま動いていて、poetry install で刈られた前例がある。
+tzdata = ">=2024.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0"
+
+[tool.poetry.scripts]
+hro-nar-synchronizer = "hro_nar_synchronizer.__main__:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
