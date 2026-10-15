@@ -1,0 +1,11 @@
+[Unit]
+Description=毎晩 結果と払戻を取り込み、被覆を確認する
+
+[Timer]
+# 最終レース(ナイターで 21:00 前後)の確定を待って流す。
+OnCalendar=*-*-* 23:30:00 Asia/Tokyo
+Persistent=true
+Unit=hro-nar-results.service
+
+[Install]
+WantedBy=timers.target

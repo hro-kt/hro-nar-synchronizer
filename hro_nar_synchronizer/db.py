@@ -100,3 +100,50 @@ class Store:
         finally:
             cur.close()
         return repr([tuple(r) for r in rows]) if rows else None
+
+    # ---- 結果・払戻 ---------------------------------------------------------
+    def races_with_results(self, date: str) -> set[str]:
+        cur = self.conn.cursor()
+        try:
+            cur.execute("SELECT DISTINCT race_id FROM nar_result WHERE kaisai_date = %s",
+                        (date,))
+            return {r[0] for r in cur.fetchall()}
+        finally:
+            cur.close()
+
+    def save_result(self, res, date: str) -> None:
+        for f in res.finishes:
+            self._exec(
+                "INSERT INTO nar_result"
+                " (race_id, umaban, chakujun, waku, horse_id, horse_name, ninki,"
+                "  tan_odds, time, kaisai_date)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                " ON CONFLICT (race_id, umaban) DO UPDATE SET"
+                "  chakujun=EXCLUDED.chakujun, ninki=EXCLUDED.ninki,"
+                "  tan_odds=EXCLUDED.tan_odds, time=EXCLUDED.time,"
+                "  fetched_at=now()",
+                (res.race_id, f.umaban, f.chakujun, f.waku, f.horse_id,
+                 f.horse_name, f.ninki, f.tan_odds, f.time, date))
+        for p in res.payouts:
+            self._exec(
+                "INSERT INTO nar_payout (race_id, bet_type, kumi, yen, ninki, kaisai_date)"
+                " VALUES (%s,%s,%s,%s,%s,%s)"
+                " ON CONFLICT (race_id, bet_type, kumi) DO UPDATE SET"
+                "  yen=EXCLUDED.yen, ninki=EXCLUDED.ninki, fetched_at=now()",
+                (res.race_id, p.bet_type, p.kumi, p.yen, p.ninki, date))
+
+    # ---- 被覆 ---------------------------------------------------------------
+    def coverage(self, date: str | None) -> list[tuple]:
+        cur = self.conn.cursor()
+        try:
+            if date:
+                cur.execute("SELECT * FROM v_nar_coverage WHERE kaisai_date = %s"
+                            " ORDER BY post_time, jyo_cd", (date,))
+            else:
+                cur.execute("SELECT * FROM v_nar_coverage"
+                            " WHERE kaisai_date >= to_char(now() - interval '7 days',"
+                            "                              'YYYYMMDD')"
+                            " ORDER BY kaisai_date DESC, post_time, jyo_cd")
+            return list(cur.fetchall())
+        finally:
+            cur.close()

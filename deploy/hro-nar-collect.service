@@ -1,0 +1,25 @@
+[Unit]
+# 地方のオッズ収集。★録り逃した日のオッズは**永久に埋まらない**。
+# 手で起動する運用にすると必ず忘れるので、毎朝 timer で起動する。
+Description=hro NAR odds collector (netkeiba, HTTP only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=azureuser
+WorkingDirectory=/home/azureuser/hro/hro-nar-synchronizer
+EnvironmentFile=/home/azureuser/hro/hro-nar-synchronizer/.env
+# 最終レース終了で自分から抜ける。24時間は保険(ナイターでも足りる)。
+TimeoutStartSec=24h
+ExecStartPre=/usr/bin/env bash -lc 'poetry run hro-nar-synchronizer races'
+ExecStart=/usr/bin/env bash -lc 'poetry run hro-nar-synchronizer collect --spat4'
+# ★開催が無い日は races が 1 を返す。それは異常ではない。
+SuccessExitStatus=0 1
+StandardOutput=append:/home/azureuser/hro/logs/nar-collect.log
+StandardError=append:/home/azureuser/hro/logs/nar-collect.log
+# JV-Link とは無関係なので、中央の収集と**同時に動いて構わない**。
+# (地方は netkeiba の HTTP だけ。1台1プロセス制約は中央側だけの話)
+
+[Install]
+WantedBy=multi-user.target

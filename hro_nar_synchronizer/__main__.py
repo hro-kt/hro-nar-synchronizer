@@ -105,6 +105,96 @@ def collect_cmd(date_, spat4, window_min, interval, max_seconds, dry_run) -> Non
     click.echo("  " + st.line())
     if st.cache_hits > st.polls * 0.3:
         click.echo("  ★キャッシュ Hit が多いです。見ている値が古い可能性があります")
+    if st.is_broken():
+        click.echo("  ✗ 1件も読めませんでした。ページの構造が変わった可能性があります")
+        raise SystemExit(1)
+    if st.silent_races:
+        click.echo(f"  ⚠ 読めないまま終わったレース: {len(st.silent_races)} 件")
+
+
+@cli.command("results")
+@click.option("--date", "date_", default=None, help="YYYYMMDD(既定 当日 JST)")
+@click.option("--force", is_flag=True, help="既に入っているレースも取り直す")
+def results_cmd(date_, force) -> None:
+    """着順と払戻を取り込む。
+
+    ★オッズだけでは ROI を計算できない。結果は netkeiba に残るので後から
+      埋められるが、取り込みが止まっていると検証も止まる。開催翌日に流す。
+    """
+    from .db import Store, connect
+    from .race_list import Race
+    from .result_page import fetch as fetch_result
+
+    cfg = load_config()
+    conn, drv = connect(cfg)
+    store = Store(conn, drv)
+    store.apply_schema(cfg.schema_path)
+    d = date_ or _today()
+    rows = store.races_for(d)
+    if not rows:
+        click.echo(f"{d} のレースが nar_race にありません(先に races を実行)")
+        raise SystemExit(1)
+
+    done = set() if force else store.races_with_results(d)
+    ok = skipped = failed = 0
+    for r in rows:
+        rid = r[0]
+        if rid in done:
+            skipped += 1
+            continue
+        try:
+            res = fetch_result(rid)
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            click.echo(f"  ✗ {rid} 取得に失敗: {type(e).__name__}: {str(e)[:80]}")
+            continue
+        if not res.confirmed:
+            click.echo(f"  … {rid} はまだ確定していません")
+            continue
+        store.save_result(res, d)
+        ok += 1
+        click.echo(f"  ○ {rid} 着順{len(res.finishes)}頭 / 払戻{len(res.payouts)}件")
+    click.echo(f"\n  取込 {ok} / 既存 {skipped} / 失敗 {failed}")
+    raise SystemExit(1 if failed else 0)
+
+
+@cli.command("coverage")
+@click.option("--date", "date_", default=None, help="YYYYMMDD(省略で直近7日)")
+@click.option("--min-snapshots", type=int, default=5,
+              help="締切前にこの数より少ないレースを問題として挙げる")
+def coverage_cmd(date_, min_snapshots) -> None:
+    """★録れているかを確認する。「録れているつもり」が一番危ない。
+
+    markup が変われば収集は0件になるが、収集側は黙って待つだけなので、
+    数ヶ月後に backtest しようとして初めて気づくことになる。
+    """
+    from .db import Store, connect
+
+    cfg = load_config()
+    conn, drv = connect(cfg)
+    store = Store(conn, drv)
+    rows = store.coverage(date_)
+    if not rows:
+        click.echo("対象がありません")
+        raise SystemExit(1)
+
+    bad = [r for r in rows if (r[7] or 0) < min_snapshots]
+    nores = [r for r in rows if (r[12] or 0) == 0]
+    click.echo(f"=== 被覆 {len(rows)} レース ===")
+    for r in rows[:40]:
+        mark = "✗" if (r[7] or 0) < min_snapshots else "○"
+        lag = f"{r[11]:.0f}s" if r[11] is not None else "--"
+        click.echo(f"  {mark} {r[1]} {r[2]}-{r[3]}R {r[4] or '--:--'}"
+                   f"  断面 {r[6] or 0}(締切前 {r[7] or 0})  締切まで {lag}"
+                   f"  結果 {r[12] or 0}行")
+    if len(rows) > 40:
+        click.echo(f"  … 他 {len(rows) - 40} レース")
+    click.echo("")
+    click.echo(f"  締切前の断面が {min_snapshots} 未満: {len(bad)} レース")
+    click.echo(f"  結果が未取込            : {len(nores)} レース")
+    if bad:
+        click.echo("  ★0 が並ぶなら収集が止まっているか、ページの構造が変わっています")
+    raise SystemExit(1 if bad else 0)
 
 
 @cli.command("probe")

@@ -145,3 +145,72 @@ def test_cache_hits_are_counted():
     st = collect([r], None, fetch_fn=_fetch, sleep_fn=_sleep,
                  now_fn=lambda: clock["t"], log=lambda s: None)
     assert st.cache_hits == st.polls > 0
+
+
+# --------------------------------------------------------------------------- #
+# ★沈黙の検知。「録れているつもり」が一番危ない。
+# --------------------------------------------------------------------------- #
+def test_repeated_empty_reads_are_warned_not_swallowed():
+    """markup が変われば0件になるが、発売前も0件。黙って同じ扱いにしない。"""
+    r = _race()
+    clock = {"t": _at(19, 20)}
+    said: list[str] = []
+
+    def _sleep(_):
+        clock["t"] += timedelta(seconds=10)
+
+    st = collect([r], None, fetch_fn=lambda rid, **kw: OddsPage(race_id=rid),
+                 sleep_fn=_sleep, now_fn=lambda: clock["t"],
+                 log=said.append)
+    assert st.empty_polls > 0
+    assert any("1頭も取れていません" in s for s in said), said
+    assert r.race_id in st.silent_races
+
+
+def test_a_single_empty_read_does_not_cry_wolf():
+    """発売前の1回で騒がない。閾値まで待つ。"""
+    r = _race()
+    clock = {"t": _at(19, 20)}
+    said: list[str] = []
+    n = {"i": 0}
+
+    def _fetch(rid, **kw):
+        n["i"] += 1
+        return OddsPage(race_id=rid) if n["i"] <= 2 else OddsPage(race_id=rid, tan={"1": 2.0})
+
+    def _sleep(_):
+        clock["t"] += timedelta(seconds=10)
+
+    collect([r], None, fetch_fn=_fetch, sleep_fn=_sleep,
+            now_fn=lambda: clock["t"], log=said.append)
+    assert not any("1頭も取れていません" in s for s in said), said
+
+
+def test_is_broken_detects_a_fully_silent_run():
+    """★1レースも読めずに1日が終わったら、それは収集が壊れている。"""
+    r = _race()
+    clock = {"t": _at(19, 20)}
+
+    def _sleep(_):
+        clock["t"] += timedelta(seconds=20)
+
+    st = collect([r], None, fetch_fn=lambda rid, **kw: OddsPage(race_id=rid),
+                 sleep_fn=_sleep, now_fn=lambda: clock["t"], log=lambda s: None)
+    assert st.is_broken()
+
+
+def test_a_healthy_run_is_not_reported_as_broken():
+    r = _race()
+    clock = {"t": _at(19, 20)}
+    n = {"i": 0}
+
+    def _fetch(rid, **kw):
+        n["i"] += 1
+        return OddsPage(race_id=rid, tan={"1": 2.0 + n["i"]})
+
+    def _sleep(_):
+        clock["t"] += timedelta(seconds=20)
+
+    st = collect([r], None, fetch_fn=_fetch, sleep_fn=_sleep,
+                 now_fn=lambda: clock["t"], log=lambda s: None)
+    assert not st.is_broken()

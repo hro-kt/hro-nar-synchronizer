@@ -17,6 +17,10 @@ from .tracks import describe
 
 JST = timezone(timedelta(hours=9))
 
+# 同じレースをこの回数続けて読んで1頭も取れなければ警告する。
+# ★発売前でも空になるので、1回で騒がない。ただし黙り続けもしない。
+EMPTY_WARN_AT = 5
+
 
 def now_jst() -> datetime:
     return datetime.now(JST)
@@ -71,11 +75,22 @@ class Stats:
     changes: int = 0
     errors: int = 0
     cache_hits: int = 0
+    empty_polls: int = 0                  # 1頭も読めなかった取得
+    silent_races: set = field(default_factory=set)
     per_race: dict[str, int] = field(default_factory=dict)
 
     def line(self) -> str:
         return (f"周回 {self.polls} / 変化 {self.changes} / 保存 {self.saved_rows}行"
-                f" / 失敗 {self.errors} / キャッシュHit {self.cache_hits}")
+                f" / 失敗 {self.errors} / 空 {self.empty_polls}"
+                f" / キャッシュHit {self.cache_hits}")
+
+    def is_broken(self) -> bool:
+        """★「録れているつもり」を検出する。
+
+        発走直前のレースを何度も叩いて**一度も読めていない**なら、発売前ではなく
+        markup が変わったと考える方が自然。黙って0行のまま走り続けさせない。
+        """
+        return self.polls > 0 and self.changes == 0 and self.empty_polls >= self.polls
 
 
 def collect(races: list[Race], store, *, spat4: bool = False,
@@ -90,6 +105,7 @@ def collect(races: list[Race], store, *, spat4: bool = False,
     log(f"  ログイン: {'あり(保存済みセッション)' if cookies else 'なし(非会員)'}")
     st = Stats()
     last: dict[str, str] = {}
+    empty: dict[str, int] = {}
     started = time.monotonic()
     done: set[str] = set()
 
@@ -119,7 +135,16 @@ def collect(races: list[Race], store, *, spat4: bool = False,
             if "Hit" in (page.x_cache or ""):
                 st.cache_hits += 1
             if not page.tan:
-                continue                      # 発売前/中止。黙って待つ
+                # ★発売前なら空で正常。しかし markup 変更でも同じ見え方になる。
+                #   区別が付かないまま黙らない。連続で読めなければ言う。
+                st.empty_polls += 1
+                empty[r.race_id] = empty.get(r.race_id, 0) + 1
+                if empty[r.race_id] == EMPTY_WARN_AT:
+                    st.silent_races.add(r.race_id)
+                    log(f"  ⚠ {describe(r.race_id)} を {EMPTY_WARN_AT} 回読んで"
+                        "1頭も取れていません。発売前か、ページの構造が変わった可能性があります")
+                continue
+            empty.pop(r.race_id, None)
             dg = page.digest_source()
             if last.get(r.race_id) == dg:
                 continue                      # 同値は保存しない

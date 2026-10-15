@@ -1,0 +1,13 @@
+[Unit]
+Description=毎朝 地方のオッズ収集を開始する
+
+[Timer]
+# 地方は門別・園田など 10:00 台から始まる開催がある。
+# 発走25分前から収集するので、09:30 起動で間に合う。
+OnCalendar=*-*-* 09:30:00 Asia/Tokyo
+# 機械が止まっていて起動時刻を跨いだら、起動後すぐ流す(その日を落とさない)
+Persistent=true
+Unit=hro-nar-collect.service
+
+[Install]
+WantedBy=timers.target

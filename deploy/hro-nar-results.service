@@ -1,0 +1,17 @@
+[Unit]
+# 結果・払戻の取り込み。★オッズだけでは ROI を計算できない。
+# 当日夜の確定分と、取りこぼした過去分を拾う。
+Description=hro NAR results/payouts import
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=azureuser
+WorkingDirectory=/home/azureuser/hro/hro-nar-synchronizer
+EnvironmentFile=/home/azureuser/hro/hro-nar-synchronizer/.env
+ExecStart=/usr/bin/env bash -lc 'poetry run hro-nar-synchronizer results'
+# 被覆の確認まで必ずやる。★「録れているつもり」を放置しないため。
+ExecStartPost=/usr/bin/env bash -lc 'poetry run hro-nar-synchronizer coverage || true'
+SuccessExitStatus=0 1
+StandardOutput=append:/home/azureuser/hro/logs/nar-results.log
+StandardError=append:/home/azureuser/hro/logs/nar-results.log
