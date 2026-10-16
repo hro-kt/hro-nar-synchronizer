@@ -147,3 +147,57 @@ class Store:
             return list(cur.fetchall())
         finally:
             cur.close()
+
+    # ---- flow 用の読み出し --------------------------------------------------
+    def races_between(self, d_from: str, d_to: str) -> list[tuple]:
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                "SELECT race_id, kaisai_date, jyo_cd, race_num, post_time"
+                " FROM nar_race WHERE kaisai_date BETWEEN %s AND %s"
+                "   AND post_time ~ '^[0-9]{1,2}:[0-9]{2}$'"
+                " ORDER BY kaisai_date, post_time, jyo_cd", (d_from, d_to))
+            return list(cur.fetchall())
+        finally:
+            cur.close()
+
+    def snapshots_for(self, race_id: str) -> list[tuple]:
+        """(observed_at, umaban, tan_odds) を時刻順に。★締切で切らずに全部返す。
+
+        切り分けは flow 側で行う。ここで落とすと、何を見て何を捨てたのかが
+        呼び出し側から見えなくなる。
+        """
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                "SELECT observed_at, umaban, tan_odds FROM nar_o1"
+                " WHERE race_id = %s AND tan_odds IS NOT NULL"
+                " ORDER BY observed_at, umaban", (race_id,))
+            return list(cur.fetchall())
+        finally:
+            cur.close()
+
+    def tansho_payouts(self, d_from: str, d_to: str) -> dict[str, dict[str, int]]:
+        """{race_id: {馬番: 払戻円}}。単勝のみ。"""
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                "SELECT race_id, kumi, yen FROM nar_payout"
+                " WHERE bet_type = '単勝' AND kaisai_date BETWEEN %s AND %s",
+                (d_from, d_to))
+            out: dict[str, dict[str, int]] = {}
+            for rid, kumi, yen in cur.fetchall():
+                out.setdefault(rid, {})[str(kumi)] = int(yen)
+            return out
+        finally:
+            cur.close()
+
+    def races_with_payout(self, d_from: str, d_to: str) -> set[str]:
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                "SELECT DISTINCT race_id FROM nar_payout"
+                " WHERE kaisai_date BETWEEN %s AND %s", (d_from, d_to))
+            return {r[0] for r in cur.fetchall()}
+        finally:
+            cur.close()

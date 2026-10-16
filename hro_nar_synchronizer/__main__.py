@@ -197,6 +197,63 @@ def coverage_cmd(date_, min_snapshots) -> None:
     raise SystemExit(1 if bad else 0)
 
 
+@cli.command("flow-backtest")
+@click.option("--from", "d_from", required=True, help="YYYYMMDD")
+@click.option("--to", "d_to", default=None, help="YYYYMMDD(既定 --from と同日)")
+@click.option("--lead", type=int, default=60, help="締切の何秒前の断面を使うか")
+@click.option("--flow-min", type=int, default=30, help="何分さかのぼった断面と比べるか")
+@click.option("--min-score", type=float, default=0.25)
+@click.option("--ninki-from", type=int, default=0)
+@click.option("--ninki-to", type=int, default=99)
+@click.option("--max-per-race", type=int, default=1)
+@click.option("--spat4", is_flag=True, help="南関東の締切を発走1分前として扱う")
+def flow_backtest(d_from, d_to, lead, flow_min, min_score, ninki_from, ninki_to,
+                  max_per_race, spat4) -> None:
+    """flow_tan(地方版)で単勝を買ったらどうだったかを出す。
+
+    ★基準は発走ではなく**締切**(発走2分前 / SPAT4 の南関東は1分前)。
+      締切後のオッズは確定オッズで、賭けられない価格。使えば未来を見たことになる。
+    ★中央の数字とは**別に**見ること。同じ数式でも市場が違う。
+    """
+    from .db import Store, connect
+    from .flow import FlowConfig, backtest
+
+    cfg_app = load_config()
+    conn, drv = connect(cfg_app)
+    store = Store(conn, drv)
+    cfg = FlowConfig(lead_sec=lead, flow_min=flow_min, spat4=spat4)
+    out = backtest(store, d_from, d_to or d_from, cfg, min_score=min_score,
+                   ninki_from=ninki_from, ninki_to=ninki_to,
+                   max_per_race=max_per_race)
+
+    click.echo(f"=== flow_tan 地方 {out['d_from']}〜{out['d_to']} ===")
+    click.echo(f"  設定  締切-{lead}s と その{flow_min}分前 / しきい値 {min_score}"
+               f" / 人気 {ninki_from}-{ninki_to} / 1レース{max_per_race}点"
+               f"{' / SPAT4' if spat4 else ''}")
+    click.echo(f"  対象レース      : {out['races']}")
+    click.echo(f"  スコア算出できた: {out['races_scored']}")
+    if out["skips"]:
+        for k, v in sorted(out["skips"].items(), key=lambda kv: -kv[1]):
+            click.echo(f"    算出できず({k}): {v}")
+    if out["races_without_payout"]:
+        click.echo(f"  払戻が未取込    : {out['races_without_payout']}"
+                   "  ★ results を先に流してください")
+    click.echo(f"  購入            : {out['bets']} 点 / {out['staked']:,} 円")
+    click.echo(f"  払戻            : {out['returned']:,} 円")
+    if out["roi"] is not None:
+        click.echo(f"  ROI             : {out['roi']:.4f}"
+                   f"  (的中 {out['hits']}/{out['bets']}"
+                   f" = {out['hit_rate']:.1%})")
+        click.echo(f"  平均の窓/ズレ   : {out['avg_window_sec']:.0f}秒"
+                   f" / {out['avg_lag_sec']:.0f}秒")
+    else:
+        click.echo("  ROI             : 購入0点のため算出できません")
+    # ★1本の数字で判断しない。2窓 OOS を取るまでは参考値。
+    click.echo("")
+    click.echo("  ※ 単一期間の数字です。採否は独立した2窓 OOS で決めること")
+    raise SystemExit(0)
+
+
 @cli.command("probe")
 @click.option("--race-id", required=True, help="netkeiba の race_id 12桁(地方)")
 @click.option("--date", "date_", default=None, help="YYYYMMDD(既定 当日 JST)")
