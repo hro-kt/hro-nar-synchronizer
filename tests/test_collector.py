@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from hro_nar_synchronizer.collector import (
-    JST, collect, deadline_dt, is_active, post_dt, rows_for,
+    JST, Stats, collect, deadline_dt, is_active, post_dt, rows_for,
 )
 from hro_nar_synchronizer.odds_page import OddsPage
 from hro_nar_synchronizer.race_list import Race
@@ -214,3 +214,70 @@ def test_a_healthy_run_is_not_reported_as_broken():
     st = collect([r], None, fetch_fn=_fetch, sleep_fn=_sleep,
                  now_fn=lambda: clock["t"], log=lambda s: None)
     assert not st.is_broken()
+
+
+# --------------------------------------------------------------------------- #
+# ★DB が落ちても収集を殺さない
+# --------------------------------------------------------------------------- #
+class _Store:
+    """insert_odds が最初の n 回だけ落ちる偽 store。"""
+
+    def __init__(self, fail_times=0):
+        self.fail_times, self.saved = fail_times, []
+
+    def last_digest(self, race_id):
+        return None
+
+    def insert_odds(self, rows):
+        if self.fail_times > 0:
+            self.fail_times -= 1
+            raise ConnectionError("the database system is shutting down")
+        self.saved.append(rows)
+        return len(rows)
+
+
+def test_a_db_outage_does_not_kill_the_collector():
+    """★2026-10-22 に PostgreSQL が再起動した。ここが素通りだと、
+       その瞬間に地方の収集が丸ごと終わる(systemd は oneshot で翌朝まで戻らない)。
+    """
+    r = _race()
+    clock = {"t": _at(19, 20)}
+    n = {"i": 0}
+
+    def _fetch(rid, **kw):
+        n["i"] += 1
+        return OddsPage(race_id=rid, tan={"1": 2.0 + n["i"], "2": 5.0})
+
+    def _sleep(_):
+        clock["t"] += timedelta(seconds=30)
+
+    store = _Store(fail_times=2)
+    st = collect([r], store, fetch_fn=_fetch, sleep_fn=_sleep,
+                 now_fn=lambda: clock["t"], log=lambda s: None)
+    assert st.db_errors == 2
+    assert store.saved, "DB が戻ってからも保存できていない"
+    assert st.changes > 0
+
+
+def test_a_value_that_failed_to_save_is_retried():
+    """★last を先に覚えると、書けなかった値が**永久に失われる**。"""
+    r = _race()
+    clock = {"t": _at(19, 20)}
+
+    def _fetch(rid, **kw):
+        return OddsPage(race_id=rid, tan={"1": 2.0, "2": 5.0})   # ずっと同じ値
+
+    def _sleep(_):
+        clock["t"] += timedelta(seconds=30)
+
+    store = _Store(fail_times=1)
+    st = collect([r], store, fetch_fn=_fetch, sleep_fn=_sleep,
+                 now_fn=lambda: clock["t"], log=lambda s: None)
+    assert st.db_errors == 1
+    assert store.saved, "一度書けなかった値が再試行されていない"
+    assert store.saved[0][0][3] == 2.0
+
+
+def test_db_failures_are_counted_in_the_summary():
+    st = Stats(polls=10, db_errors=3)
+    assert "DB失敗 3" in st.line()

@@ -110,6 +110,10 @@ def collect_cmd(date_, spat4, window_min, interval, max_seconds, dry_run) -> Non
         raise SystemExit(1)
     if st.silent_races:
         click.echo(f"  ⚠ 読めないまま終わったレース: {len(st.silent_races)} 件")
+    if st.db_errors:
+        click.echo(f"  ⚠ DB に書けなかった回数: {st.db_errors}。"
+                   "保守による再起動なら数分で戻り、値は次の周回で入り直します。"
+                   "多いときは coverage で欠けを確認してください")
 
 
 @cli.command("results")

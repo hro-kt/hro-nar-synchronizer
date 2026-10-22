@@ -76,12 +76,14 @@ class Stats:
     errors: int = 0
     cache_hits: int = 0
     empty_polls: int = 0                  # 1頭も読めなかった取得
+    db_errors: int = 0                    # DB に書けなかった回数
     silent_races: set = field(default_factory=set)
     per_race: dict[str, int] = field(default_factory=dict)
 
     def line(self) -> str:
         return (f"周回 {self.polls} / 変化 {self.changes} / 保存 {self.saved_rows}行"
                 f" / 失敗 {self.errors} / 空 {self.empty_polls}"
+                f" / DB失敗 {self.db_errors}"
                 f" / キャッシュHit {self.cache_hits}")
 
     def is_broken(self) -> bool:
@@ -148,17 +150,37 @@ def collect(races: list[Race], store, *, spat4: bool = False,
             dg = page.digest_source()
             if last.get(r.race_id) == dg:
                 continue                      # 同値は保存しない
-            prev = last.get(r.race_id)
-            last[r.race_id] = dg
-            if prev is None and store is not None:
+            first_for_race = r.race_id not in last
+            if first_for_race and store is not None:
                 # 再起動時に同じ値を二重に入れない
-                if store.last_digest(r.race_id) is not None and _same(store, r, page):
+                try:
+                    if store.last_digest(r.race_id) is not None and _same(store, r, page):
+                        last[r.race_id] = dg
+                        continue
+                except Exception as e:  # noqa: BLE001
+                    st.db_errors += 1
+                    log(f"  ✗ {describe(r.race_id)} DB を読めません: "
+                        f"{type(e).__name__}: {str(e)[:90]}")
                     continue
             rows = rows_for(r, page, now_fn(), spat4=spat4)
             if store is not None:
-                st.saved_rows += store.insert_odds(rows)
+                # ★DB が一瞬落ちても**収集を殺さない**。
+                #   2026-10-22 に PostgreSQL が再起動し、agent が
+                #   「the database system is shutting down」を吐いた。
+                #   ここが素通りだと、その瞬間に地方の収集が丸ごと終わる
+                #   (systemd は oneshot なので翌朝まで戻らない)。
+                try:
+                    st.saved_rows += store.insert_odds(rows)
+                except Exception as e:  # noqa: BLE001
+                    st.db_errors += 1
+                    log(f"  ✗ {describe(r.race_id)} DB に書けません: "
+                        f"{type(e).__name__}: {str(e)[:90]}")
+                    # ★last を更新しない。次の周回で入れ直す
+                    continue
             else:
                 st.saved_rows += len(rows)
+            # ★保存できてから覚える。先に覚えると、書けなかった値が永久に失われる
+            last[r.race_id] = dg
             st.changes += 1
             st.per_race[r.race_id] = st.per_race.get(r.race_id, 0) + 1
             dl = deadline_dt(r, spat4=spat4)
